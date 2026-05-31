@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>透明背景水波占比组件 - 支持点击修改</title>
+    <style>
+        /* 页面背景改为透明（如果单独测试，你可以给body加个背景色来看透明效果） */
+        body {
+            background-color: transparent; 
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            margin: 0;
+            font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+        }
+
+        /* 严格限制 240x240px 的外层容器 */
+        .water-wave-container {
+            position: relative;
+            width: 240px;
+            height: 240px;
+            border-radius: 50%;
+            padding: 4px;
+            box-sizing: border-box;
+            background: linear-gradient(135deg, #26a69a, #00e5ff);
+            box-shadow: 0 0 15px rgba(0, 229, 255, 0.15);
+        }
+
+        /* 内部包裹层：背景改为 transparent (透明) */
+        .water-wave-inner {
+            width: 100%;
+            height: 100%;
+            border-radius: 50%;
+            background-color: transparent; 
+            position: relative;
+            overflow: hidden; /* 裁剪超出圆圈的水波 */
+        }
+
+        canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+        }
+
+        /* 中央百分比文字：支持点击编辑 */
+        .percentage-text {
+            position: absolute;
+            width: 120px; /* 限制宽度，防止输入太长变形 */
+            left: 50%;
+            top: 50%;
+            transform: translate(-50%, -50%);
+            font-size: 40px;
+            font-weight: bold;
+            color: #ffffff;
+            text-shadow: 0 2px 5px rgba(0,0,0,0.5);
+            z-index: 10;
+            text-align: center;
+            outline: none; /* 去掉点击时的外边框 */
+            cursor: pointer;
+            transition: transform 0.2s, background 0.2s;
+            border-radius: 4px;
+        }
+
+        /* 鼠标悬浮在数字上时的微交互提示 */
+        .percentage-text:hover {
+            background: rgba(255, 255, 255, 0.1);
+            transform: translate(-50%, -50%) scale(1.05);
+        }
+
+        /* 正在编辑时的样式 */
+        .percentage-text:focus {
+            background: rgba(0, 0, 0, 0.3);
+            border: 1px dashed rgba(255,255,255,0.5);
+            cursor: text;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="water-wave-container">
+        <div class="water-wave-inner">
+            <canvas id="waveCanvas"></canvas>
+            <div class="percentage-text" id="percentageTxt" contenteditable="true" title="点击修改占比">68%</div>
+        </div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('waveCanvas');
+        const ctx = canvas.getContext('2d');
+        const textEl = document.getElementById('percentageTxt');
+
+        // 解决高清屏（Retina）模糊问题
+        const size = 240;
+        const dpr = window.devicePixelRatio || 1;
+        canvas.width = size * dpr;
+        canvas.height = size * dpr;
+        ctx.scale(dpr, dpr);
+
+        // --- 核心业务配置 ---
+        let targetProgress = 0.68;  // 目标占比（默认68%）
+        let currentProgress = 0;    // 当前动画渲染的动态进度
+        
+        let angle = 0;             // 水波初始相位
+        const waveSpeed = 0.045;   // 水波横向流动速度
+        const waveHeight = 7;      // 水波起伏振幅
+        const waveLength = 130;    // 水波波长
+
+        // --- 气泡粒子系统配置 ---
+        const bubbles = [];       
+        const maxBubbles = 20;    
+
+        class Bubble {
+            constructor(waterY) {
+                this.init(waterY);
+            }
+
+            init(waterY) {
+                this.x = Math.random() * size; 
+                this.y = waterY + Math.random() * (size - waterY) + 10; 
+                this.radius = Math.random() * 3 + 1.5; 
+                this.speedY = Math.random() * 0.8 + 0.4; 
+                this.speedX = (Math.random() - 0.5) * 0.4; 
+                this.alpha = Math.random() * 0.4 + 0.3; 
+                this.isDead = false;
+            }
+
+            update(waterY) {
+                this.y -= this.speedY; 
+                this.x += this.speedX; 
+
+                if (this.y < waterY + 15) {
+                    this.alpha -= 0.02;
+                }
+
+                if (this.y < waterY || this.alpha <= 0 || this.y > size) {
+                    this.isDead = true;
+                }
+            }
+
+            draw() {
+                ctx.save();
+                ctx.globalAlpha = this.alpha;
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+                ctx.fillStyle = 'rgba(255, 255, 255, 0.6)';
+                ctx.fill();
+
+                ctx.beginPath();
+                ctx.arc(this.x - this.radius*0.3, this.y - this.radius*0.3, this.radius*0.2, 0, Math.PI * 2);
+                ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
+                ctx.fill();
+                ctx.restore();
+            }
+        }
+
+        // --- 核心渲染动画循环 ---
+        function draw() {
+            ctx.clearRect(0, 0, size, size);
+
+            // 水位平滑追赶目标（支持上涨和下跌）
+            const step = 0.008; 
+            if (Math.abs(currentProgress - targetProgress) > step) {
+                if (currentProgress < targetProgress) {
+                    currentProgress += step;
+                } else {
+                    currentProgress -= step;
+                }
+            } else {
+                currentProgress = targetProgress;
+            }
+
+            // 当没有处在编辑状态时，实时更新数字内容
+            if (document.activeElement !== textEl) {
+                textEl.innerText = Math.floor(currentProgress * 100) + '%';
+            }
+
+            const waveY = size * (1 - currentProgress);
+
+            // 1. 【底层】后层背景水波纹
+            drawWave(waveY, angle + Math.PI, 'rgba(0, 229, 255, 0.2)');
+
+            // 2. 【中层】前层主水波纹（带水深垂直渐变）
+            const gradient = ctx.createLinearGradient(0, waveY - waveHeight, 0, size);
+            gradient.addColorStop(0, '#00e5ff');   
+            gradient.addColorStop(0.4, '#00b0ff'); 
+            gradient.addColorStop(1, '#0d47a1');   
+            drawWave(waveY, angle, gradient);
+
+            // 3. 【顶层】前置气泡更新与绘制
+            if (bubbles.length < maxBubbles && currentProgress > 0.05) {
+                if(Math.random() < 0.15) {
+                    bubbles.push(new Bubble(waveY));
+                }
+            }
+
+            for (let i = bubbles.length - 1; i >= 0; i--) {
+                bubbles[i].update(waveY);
+                if (bubbles[i].isDead) {
+                    bubbles.splice(i, 1);
+                } else {
+                    bubbles[i].draw(); 
+                }
+            }
+
+            angle += waveSpeed;
+            requestAnimationFrame(draw);
+        }
+
+        function drawWave(baseY, phase, fillStyle) {
+            ctx.beginPath();
+            ctx.moveTo(0, size);
+            for (let x = 0; x <= size; x++) {
+                const y = waveHeight * Math.sin((x / waveLength) * Math.PI * 2 + phase) + baseY;
+                ctx.lineTo(x, y);
+            }
+            ctx.lineTo(size, size);
+            ctx.closePath();
+            ctx.fillStyle = fillStyle;
+            ctx.fill();
+        }
+
+        // --- 交互事件处理：点击修改与保存 ---
+
+        // 核心保存逻辑
+        function saveNewProgress() {
+            // 提取输入内容中的纯数字
+            let rawText = textEl.innerText.replace('%', '').trim();
+            let val = parseInt(rawText, 10);
+
+            // 校验合法性：如果不是数字或者超出0-100，则还原为当前值
+            if (isNaN(val) || val < 0 || val > 100) {
+                val = Math.floor(targetProgress * 100);
+            }
+
+            // 更新目标进度，触发波浪动画平滑过渡
+            targetProgress = val / 100;
+            
+            // 格式化规范显示
+            textEl.innerText = val + '%';
+            
+            // 【此处可扩展】：可以通过后端接口或 LocalStorage 将 val 保存下来
+            console.log("已成功保存新占比：", val);
+        }
+
+        // 获得焦点时（点击时），把 % 删掉方便用户输入纯数字
+        textEl.addEventListener('focus', () => {
+            textEl.innerText = textEl.innerText.replace('%', '');
+            // 选中所有文本，方便直接覆盖输入
+            setTimeout(() => document.execCommand('selectAll', false, null), 0);
+        });
+
+        // 失去焦点时（点别的地方），自动保存
+        textEl.addEventListener('blur', () => {
+            saveNewProgress();
+        });
+
+        // 监听键盘事件
+        textEl.addEventListener('keydown', (e) => {
+            // 按下回车键 (Enter)，强制失去焦点以触发 blur 保存
+            if (e.key === 'Enter') {
+                e.preventDefault(); // 阻止换行
+                textEl.blur(); 
+            }
+            
+            // 限制输入：除了数字键、退格、删除、左右箭头外，其他按键无效
+            const isNumber = /^[0-9]$/.test(e.key);
+            const isControl = ['Backspace', 'Delete', 'ArrowLeft', 'ArrowRight', 'Tab'].includes(e.key);
+            if (!isNumber && !isControl) {
+                e.preventDefault();
+            }
+        });
+
+        // 启动组件
+        draw();
+    </script>
+</body>
+</html>
